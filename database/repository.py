@@ -103,6 +103,8 @@ class JobRepository:
                 cursor.execute(f"DELETE FROM jobs WHERE scraped_at < datetime('now', '-{days} days')")
                 deleted_rows = cursor.rowcount
                 conn.commit()
+                if deleted_rows > 0:
+                    logger.info(f"Cleaned up {deleted_rows} expired job(s) older than {days} days.")
                 return deleted_rows
         except Exception as e:
             logger.error(f"Error cleaning up old jobs: {e}")

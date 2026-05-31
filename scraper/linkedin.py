@@ -27,8 +27,14 @@ def get_random_headers() -> dict:
         "Upgrade-Insecure-Requests": "1"
     }
 
-async def fetch_jobs_page(client: httpx.AsyncClient, keywords: str, location: str, start: int = 0, retries: int = 3) -> str:
-    """Hits the LinkedIn Guest Jobs API endpoint with retries on 429."""
+async def fetch_jobs_page(client: httpx.AsyncClient, keywords: str, location: str, start: int = 0, retries: int = 5, cooldown_event: asyncio.Event = None) -> str:
+    """Hits the LinkedIn Guest Jobs API endpoint with retries on 429.
+    
+    Args:
+        cooldown_event: Optional shared Event. When set, all LinkedIn tasks
+                        pause until the cooldown clears — prevents the remaining
+                        tasks from hammering LinkedIn after a 429.
+    """
     encoded_keywords = urllib.parse.quote(keywords)
     encoded_location = urllib.parse.quote(location)
     
@@ -39,19 +45,33 @@ async def fetch_jobs_page(client: httpx.AsyncClient, keywords: str, location: st
     )
 
     for attempt in range(retries):
+        # If another task triggered a global cooldown, wait for it to clear
+        if cooldown_event is not None and cooldown_event.is_set():
+            logger.debug(f"Global 429 cooldown active — pausing '{keywords}' request...")
+            while cooldown_event.is_set():
+                await asyncio.sleep(1.0)
+            logger.debug(f"Cooldown cleared — resuming '{keywords}'.")
+
         try:
             response = await client.get(url, headers=get_random_headers(), timeout=15.0)
             if response.status_code == 429:
-                wait_time = random.uniform(2.0, 5.0) * (2 ** attempt)
-                logger.warning(f"Rate limited (429) by LinkedIn for '{keywords}'. Retrying in {wait_time:.1f}s...")
+                wait_time = random.uniform(5.0, 10.0) * (2 ** attempt)
+                logger.warning(f"Rate limited (429) by LinkedIn for '{keywords}'. Attempt {attempt + 1}/{retries}, backing off {wait_time:.1f}s...")
+                # Signal global cooldown so sibling tasks pause too
+                if cooldown_event is not None:
+                    cooldown_event.set()
+                    asyncio.get_event_loop().call_later(wait_time, cooldown_event.clear)
                 await asyncio.sleep(wait_time)
                 continue
             response.raise_for_status()
             return response.text
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 429 and attempt < retries - 1:
-                wait_time = random.uniform(2.0, 5.0) * (2 ** attempt)
-                logger.warning(f"HTTP 429 scraping LinkedIn. Retrying in {wait_time:.1f}s...")
+                wait_time = random.uniform(5.0, 10.0) * (2 ** attempt)
+                logger.warning(f"HTTP 429 scraping LinkedIn. Attempt {attempt + 1}/{retries}, backing off {wait_time:.1f}s...")
+                if cooldown_event is not None:
+                    cooldown_event.set()
+                    asyncio.get_event_loop().call_later(wait_time, cooldown_event.clear)
                 await asyncio.sleep(wait_time)
                 continue
             logger.error(f"HTTP error scraping LinkedIn (Status {e.response.status_code}): {e}")
@@ -60,7 +80,7 @@ async def fetch_jobs_page(client: httpx.AsyncClient, keywords: str, location: st
             logger.error(f"Request error scraping LinkedIn: {e}")
             return ""
             
-    logger.error(f"Max retries reached for LinkedIn scraping '{keywords}' in '{location}'.")
+    logger.error(f"Max retries ({retries}) reached for LinkedIn scraping '{keywords}' in '{location}'.")
     return ""
 
 def is_title_relevant(title: str) -> bool:
@@ -145,7 +165,7 @@ def parse_jobs(html: str) -> List[Job]:
 
     return jobs
 
-async def scrape_linkedin_jobs(keyword: str, location: str, max_pages: int = 1) -> List[Job]:
+async def scrape_linkedin_jobs(keyword: str, location: str, max_pages: int = 1, cooldown_event: asyncio.Event = None) -> List[Job]:
     """
     Main scraping orchestration for LinkedIn.
     Scrapes multiple pages until no more jobs are found or max_pages is reached.
@@ -158,7 +178,7 @@ async def scrape_linkedin_jobs(keyword: str, location: str, max_pages: int = 1) 
             start_idx = page * 25 # LinkedIn API returns 25 results per page
             logger.debug(f"Fetching page {page + 1} (start={start_idx})...")
             
-            html = await fetch_jobs_page(client, keyword, location, start=start_idx)
+            html = await fetch_jobs_page(client, keyword, location, start=start_idx, cooldown_event=cooldown_event)
             if not html.strip():
                 logger.debug("No more HTML returned. Ending pagination.")
                 break

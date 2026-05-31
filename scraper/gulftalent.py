@@ -1,4 +1,5 @@
 import httpx
+import hashlib
 import urllib.parse
 from bs4 import BeautifulSoup
 from typing import List
@@ -56,10 +57,10 @@ async def scrape_gulftalent_jobs(keyword: str, location: str, max_results: int =
                 href = title_el.get("href", "")
                 job_url = f"https://www.gulftalent.com{href}" if href.startswith("/") else href
                 
-                job_id = f"gulftalent_{title.replace(' ', '_')}"
-                
                 company_el = card.select_one("span.company, div.company, a[class*='company']")
                 company = company_el.get_text(strip=True) if company_el else "Unknown Company"
+                
+                job_id = f"gulftalent_{hashlib.md5(f'{title}_{company}'.encode()).hexdigest()[:10]}"
                 
                 loc_el = card.select_one("span.location, div.location, span[class*='location']")
                 loc = loc_el.get_text(strip=True) if loc_el else location

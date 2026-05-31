@@ -23,6 +23,22 @@ except ValueError:
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# Deduplication TTL — jobs older than this are purged so they can re-surface
+try:
+    DEDUP_TTL_DAYS = int(os.getenv("DEDUP_TTL_DAYS", "7"))
+except ValueError:
+    DEDUP_TTL_DAYS = 7
+
+# LinkedIn rate-limit tuning
+try:
+    LINKEDIN_DELAY_MIN = float(os.getenv("LINKEDIN_DELAY_MIN", "3.0"))
+    LINKEDIN_DELAY_MAX = float(os.getenv("LINKEDIN_DELAY_MAX", "6.0"))
+    LINKEDIN_MAX_CONCURRENCY = int(os.getenv("LINKEDIN_MAX_CONCURRENCY", "2"))
+except ValueError:
+    LINKEDIN_DELAY_MIN = 3.0
+    LINKEDIN_DELAY_MAX = 6.0
+    LINKEDIN_MAX_CONCURRENCY = 2
+
 # Database Setting
 DB_PATH = "jobs.db"
 
